@@ -15,9 +15,10 @@ import random
 import time
 import queue
 import os
+import copy
 
 class Ambulance:
-    def __init__(self, is_assigned, location, call, target, priority, hos, bas):
+    def __init__(self, is_assigned,  location, call, target, priority, hos, bas):
         self.is_assigned = is_assigned
         self.location = location
         self.call = call
@@ -26,7 +27,7 @@ class Ambulance:
         self.priority = priority
         self.target = target
         self.status = 0
-
+        self.preempted = False
 
 def manhattan(p1, p2):
     return abs(p1[0]- p2[0]) + abs(p1[1]- p2[1])
@@ -39,10 +40,12 @@ def dispatch(call, priority):
             if closest_ambulance is None or manhattan(call, ambulance.location) < manhattan(call,
                                                                                             closest_ambulance.location):
                 closest_ambulance = ambulance
+
     if closest_ambulance is not None:
         if closest_ambulance.is_assigned == True:
             #Prempted
-            queueCalls.put((priority, call))
+            closest_ambulance.preempted = True
+            queueCalls.put((closest_ambulance.priority, copy.copy(closest_ambulance.call)))
         else:
             bases_count[closest_ambulance.base] -= 1
 
@@ -58,8 +61,10 @@ def dispatch(call, priority):
                 closest_hospital = hospital
 
         closest_ambulance.hospital = closest_hospital
+        #print("closest from call (" + str(call[0]) + " , "+str(call[1]) + ") ->(" + str(closest_hospital[0]) + ", " + str(closest_hospital[1]))
     else:
         queueCalls.put((priority,call))
+
 
 # Define some colors
 BLACK = (0, 0, 0)
@@ -118,25 +123,27 @@ for row in range(15):
 pygame.init()
 
 # Set the HEIGHT and WIDTH of the screen
-WINDOW_SIZE = [930, 930]
+WINDOW_SIZE = [910, 910]
 screen = pygame.display.set_mode(WINDOW_SIZE)
 player = pygame.image.load(os.path.join("ambulance.png"))
 player2 = pygame.image.load(os.path.join("ambulance_active.png"))
+player3 = pygame.image.load(os.path.join("hospital.png"))
 player.convert()
 player2.convert()
 # Set title of screen
 pygame.display.set_caption("EMS Simulation")
 
-
 font = pygame.font.SysFont("comicsansms", 30)
-
+font2 = pygame.font.SysFont("comicsansms", 20)
 # Loop until the user clicks the close button.
 done = False
 
 # Used to manage how fast the screen updates
 clock = pygame.time.Clock()
 
-priority_rates = np.array([0.1, 0.09, 0.111, 0.5])
+priority_rates = np.array([0.5, 0.45, 0.555, 2.5])
+ticks = 1
+sum_of_sums = 0
 def call_generator():
     sum_rates = np.sum(priority_rates)
     ratios = []
@@ -146,16 +153,13 @@ def call_generator():
         ratios.append(p)
     while not done:
         priority = np.random.choice(np.arange(0, 4), p=ratios)
-        print(" p : "+ str(priority))
         rate = priority_rates[priority]
         #print(1/rate)
         x, y = random.randint(0, 14), random.randint(0, 14)
-        print(x, y)
         if grid[x][y] == 0:
             grid[x][y] = CALL + priority
             dispatch([x,y], priority)
-        time.sleep(1 / rate)
-        print('done')
+        time.sleep(1/rate)
     pass
 
 #initialize ambulances in bases
@@ -172,18 +176,19 @@ for base in bases:
 
 thread_call_gen = threading.Thread(target=call_generator)
 thread_call_gen.start()
-
 # -------- Main Program Loop -----------
 while not done:
+
+    counts = [0,0,0,0]
+    for priority, call in queueCalls.queue:
+        counts[priority-1] +=1
+
     for event in pygame.event.get():  # User did something
         if event.type == pygame.QUIT:  # If user clicked close
             done = True  # Flag that we are done so we exit this loop
 
     for ambulance in ambulances:
-        print("Active" if ambulance.status == 1 else "Inactive")
-
-    for ambulance in ambulances:
-        # grid[ambulance.location[0]][ambulance.location[1]] = 0
+        #grid[ambulance.location[0]][ambulance.location[1]] = 0
         if ambulance.location[0] != ambulance.target[0]:
             if ambulance.target[0] > ambulance.location[0]:
                 ambulance.location[0] = ambulance.location[0] + 1
@@ -198,6 +203,7 @@ while not done:
             #Check where to move based on where you are
             if ambulance.is_assigned:
                 if manhattan(ambulance.location, ambulance.call) == 0:
+                    ambulance.preempted = False
                     ambulance.target = ambulance.hospital
                     # print("Setting " + str(ambulance.base))
                     ambulance.status = 1
@@ -208,12 +214,20 @@ while not done:
                         bases_count[ambulance.base] +=1
                         ambulance.is_assigned = False
                         ambulance.target = bases[ambulance.base]
+                        ambulance.priority = 10
                     else:
                         priority, nextCall = queueCalls.get()
-                        ambulance.target = ambulance.call = nextCall
+                        ambulance.target = nextCall
+                        ambulance.call = nextCall
+                        ambulance.priority = priority
+                        closest_hospital = None
+                        for hospital in hospitals:
+                            if closest_hospital is None or manhattan(hospital, nextCall) < manhattan(closest_hospital,
+                                                                                                 nextCall):
+                                closest_hospital = hospital
 
+                        ambulance.hospital = closest_hospital
         #grid[ambulance.location[0]][ambulance.location[1]] = AMBULANCE
-
 
     for base in bases:
         grid[base[0]][base[1]] = BASE
@@ -232,8 +246,6 @@ while not done:
                 color = WHITE
                 if grid[row][column] == BASE:
                         color = BASE_COL
-                elif grid[row][column] == HOSPITAL:
-                    color = HOSPITAL_COL
                 elif grid[row][column] >= CALL:
                         # print("prior : " + str(grid[row][column] - CALL))
                         color = REDS[grid[row][column] - CALL]
@@ -243,6 +255,10 @@ while not done:
                                   (MARGIN + HEIGHT) * row + MARGIN,
                                   WIDTH,
                                   HEIGHT])
+
+                if grid[row][column] == HOSPITAL:
+                    screen.blit(player3, ((MARGIN + WIDTH) * column + MARGIN,
+                                         (MARGIN + HEIGHT) * row + MARGIN))
 
     for base, count in zip(bases, bases_count):
         text = font.render(str(count), True, (255, 255, 255))
@@ -257,8 +273,14 @@ while not done:
             screen.blit(player2, ((MARGIN + WIDTH) * y + MARGIN,
                                  (MARGIN + HEIGHT) * x + MARGIN))
 
+        if ambulance.preempted:
+            text = font2.render("PREEMPTED", True, (255, 0, 0))
+            screen.blit(text, ((MARGIN + WIDTH) * ambulance.location[1] + MARGIN,
+                               (MARGIN + HEIGHT) * ambulance.location[0] + MARGIN))
+
+
     # Limit to 60 frames per second
-    clock.tick(1)
+    clock.tick(5)
 
     # Go ahead and update the screen with what we've drawn.
     pygame.display.flip()
